@@ -3,7 +3,7 @@ package main
 import (
 	"log"
 
-	waf "github.com/codescalersinternships/easywaf-nabil-salma/pkg"
+	"github.com/codescalersinternships/easywaf-nabil-salma/pkg"
 )
 
 func main() {
