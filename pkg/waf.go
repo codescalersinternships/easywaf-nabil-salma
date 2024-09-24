@@ -12,19 +12,19 @@ import (
 )
 
 type Waf struct {
-	logger *slog.Logger
-	Cnf    Config
+	logger         *slog.Logger
+	Cnf            Config
+	backendAddress string
 }
 
 type Config struct {
-	allowedHTTPMethods []string `yaml:"allowedhttpmethods"`
-	// dryMode            bool     `yaml:"drymode"`
-	ipBlackList       []string `yaml:"ipblacklist"`
-	queryUrlWhitelist []string `yaml:"queryurlwhitelist"`
-	blockedPatterns   []string `yaml:"blockedpatterns"`
+	AllowedHTTPMethods []string `yaml:"allowedhttpmethods"`
+	IpBlackList        []string `yaml:"ipblacklist"`
+	QueryUrlWhitelist  []string `yaml:"queryurlwhitelist"`
+	BlockedPatterns    []string `yaml:"blockedpatterns"`
 }
 
-func NewWaf(args ...string) (*Waf, error) {
+func NewWaf(backendAddress string, args ...string) (*Waf, error) {
 	filePath := "config.yaml"
 	if len(args) > 0 {
 		filePath = args[0]
@@ -37,16 +37,17 @@ func NewWaf(args ...string) (*Waf, error) {
 	return &Waf{
 		logger,
 		config,
+		backendAddress,
 	}, nil
 }
 
-func (wf *Waf) checkHTTPMethod(w http.ResponseWriter, r *http.Request) error {
-	if slices.Contains(wf.Cnf.allowedHTTPMethods, r.Method) {
+func (wf *Waf) checkHTTPMethod(w http.ResponseWriter, r *http.Request) (bool, error) {
+	if slices.Contains(wf.Cnf.AllowedHTTPMethods, r.Method) {
 		wf.logger.Info("http method is supported",
 			"method", r.Method,
 			"ip", r.RemoteAddr,
 			"url", r.URL)
-		return nil
+		return false, nil
 	}
 	wf.logger.Warn("unsupported HTTP method ",
 		"method", r.Method,
@@ -54,18 +55,18 @@ func (wf *Waf) checkHTTPMethod(w http.ResponseWriter, r *http.Request) error {
 		"url", r.URL)
 	w.WriteHeader(http.StatusBadRequest)
 	if _, err := w.Write([]byte("unsupported HTTP method")); err != nil {
-		return err
+		return true, err
 	}
-	return fmt.Errorf("http method: %s for request: %v is unsupported", r.Method, r)
+	return true, nil
 }
 
-func (wf *Waf) checkIP(w http.ResponseWriter, r *http.Request) error {
-	if !slices.Contains(wf.Cnf.ipBlackList, r.RemoteAddr) {
+func (wf *Waf) checkIP(w http.ResponseWriter, r *http.Request) (bool, error) {
+	if !slices.Contains(wf.Cnf.IpBlackList, r.RemoteAddr) {
 		wf.logger.Info("Ip isn't blacklisted ",
 			"method", r.Method,
 			"ip", r.RemoteAddr,
 			"url", r.URL)
-		return nil
+		return false, nil
 	}
 	wf.logger.Warn("IP addres is Blacklisted",
 		"method", r.Method,
@@ -73,18 +74,18 @@ func (wf *Waf) checkIP(w http.ResponseWriter, r *http.Request) error {
 		"url", r.URL)
 	w.WriteHeader(http.StatusForbidden)
 	if _, err := w.Write([]byte("IP addres is Blacklisted")); err != nil {
-		return err
+		return true, err
 	}
-	return fmt.Errorf("ip: %s for request: %v is blacklisted", r.RemoteAddr, r)
+	return true, nil
 }
 
-func (wf *Waf) checkUrl(w http.ResponseWriter, r *http.Request) error {
-	if slices.Contains(wf.Cnf.queryUrlWhitelist, r.URL.String()) {
+func (wf *Waf) checkUrl(w http.ResponseWriter, r *http.Request) (bool, error) {
+	if slices.Contains(wf.Cnf.QueryUrlWhitelist, r.URL.Path) {
 		wf.logger.Info("allowed url ",
 			"method", r.Method,
 			"ip", r.RemoteAddr,
 			"url", r.URL)
-		return nil
+		return false, nil
 	}
 	w.WriteHeader(http.StatusForbidden)
 	wf.logger.Warn("not allowed url",
@@ -92,16 +93,12 @@ func (wf *Waf) checkUrl(w http.ResponseWriter, r *http.Request) error {
 		"ip", r.RemoteAddr,
 		"url", r.URL)
 	if _, err := w.Write([]byte("not allowed url")); err != nil {
-		return err
+		return true, err
 	}
-	return fmt.Errorf("url: %s for request: %v is not allowed", r.URL.String(), r)
+	return true, nil
 }
 func sqlInjectionHelper(str string) bool {
 	sqlInjectPatterns := []*regexp.Regexp{
-		regexp.MustCompile(`(?i)--`),
-		regexp.MustCompile(`(?i)\/\*`),
-		regexp.MustCompile(`(?i)\'`),
-		regexp.MustCompile(`(?i)\"`),
 		regexp.MustCompile(`(?i)OR\s+1=1`),
 		regexp.MustCompile(`(?i)AND\s+1=1`),
 		regexp.MustCompile(`(?i)UNION\s+SELECT`),
@@ -114,7 +111,7 @@ func sqlInjectionHelper(str string) bool {
 	}
 	return false
 }
-func (wf *Waf) checkSQLInjection(w http.ResponseWriter, r *http.Request) error {
+func (wf *Waf) checkSQLInjection(w http.ResponseWriter, r *http.Request) (bool, error) {
 	if r.Method == "GET" {
 		query := r.URL.RequestURI()
 		slicedQuery := strings.Split(query, "&")
@@ -129,9 +126,9 @@ func (wf *Waf) checkSQLInjection(w http.ResponseWriter, r *http.Request) error {
 					"ip", r.RemoteAddr,
 					"url", r.URL)
 				if _, err := w.Write([]byte("sql injection detected")); err != nil {
-					return err
+					return true, err
 				}
-				return fmt.Errorf("url: %s for request: %v contains sql injection", r.URL.String(), r)
+				return true, nil
 			}
 		}
 
@@ -139,64 +136,67 @@ func (wf *Waf) checkSQLInjection(w http.ResponseWriter, r *http.Request) error {
 		buf := new(strings.Builder)
 		_, err := io.Copy(buf, r.Body)
 		if err != nil {
-			return err
+			return false, err
 		}
 		bufString := buf.String()
+		r.Body = io.NopCloser(strings.NewReader(bufString))
 		if sqlInjectionHelper(bufString) {
 			wf.logger.Warn("sql injection detected",
 				"method", r.Method,
 				"ip", r.RemoteAddr,
 				"url", r.URL)
 			if _, err = w.Write([]byte("sql injection detected")); err != nil {
-				return err
+				return true, err
 			}
-			return fmt.Errorf("body: %s for request: %v contains sql injection", r.URL.String(), r)
+			return true, nil
 		}
 	}
-	return nil
+	return false, nil
 }
 
-func (wf *Waf) checkXSSInjection(w http.ResponseWriter, r *http.Request) error {
+func (wf *Waf) checkXSSInjection(w http.ResponseWriter, r *http.Request) (bool, error) {
 	scriptTagPattern := regexp.MustCompile(`(?i)<\s*script[^>]*\s*>(.|\s)*?<\s*/\s*script\s*>`)
 	if r.Method == "POST" {
 		buf := new(strings.Builder)
 		_, err := io.Copy(buf, r.Body)
 		if err != nil {
-			return err
+			return false, err
 		}
 		bufString := buf.String()
+		r.Body = io.NopCloser(strings.NewReader(bufString))
+
 		if scriptTagPattern.MatchString(bufString) {
-			wf.logger.Info("Requst contain XSS injection in the body",
+			wf.logger.Warn("Requst contain XSS injection in the body",
 				"method", r.Method,
 				"ip", r.RemoteAddr,
 				"url", r.URL,
 				"body", bufString)
 			w.WriteHeader(http.StatusForbidden)
 			if _, err := w.Write([]byte("xss injectin found")); err != nil {
-				return err
+				return true, err
 			}
-			return fmt.Errorf("body: %s for request: %v is not allowed", bufString, r)
+			return true, nil
 		}
 
 	} else if r.Method == "GET" {
 		if scriptTagPattern.MatchString(r.URL.RequestURI()) {
-			wf.logger.Info("Requst contain XSS injection in the body",
+			wf.logger.Warn("Requst contain XSS injection in the body",
 				"method", r.Method,
 				"ip", r.RemoteAddr,
 				"url", r.URL)
 			w.WriteHeader(http.StatusForbidden)
 			if _, err := w.Write([]byte("xss injectin found")); err != nil {
-				return err
+				return true, err
 			}
-			return fmt.Errorf("url: %s for request: %v is not allowed", r.URL.String(), r)
+			return true, nil
 		}
 	}
-	return nil
+	return false, nil
 }
 
-func (wf *Waf) checkCustomPatterns(w http.ResponseWriter, r *http.Request) error {
+func (wf *Waf) checkCustomPatterns(w http.ResponseWriter, r *http.Request) (bool, error) {
 	foundPatterns := []string{}
-	for _, patterns := range wf.Cnf.blockedPatterns {
+	for _, patterns := range wf.Cnf.BlockedPatterns {
 		scriptTagPattern := regexp.MustCompile(patterns)
 		if r.Method == "GET" {
 			if scriptTagPattern.MatchString(r.URL.RequestURI()) {
@@ -206,16 +206,17 @@ func (wf *Waf) checkCustomPatterns(w http.ResponseWriter, r *http.Request) error
 			buf := new(strings.Builder)
 			_, err := io.Copy(buf, r.Body)
 			if err != nil {
-				return err
+				return false, err
 			}
 			bufString := buf.String()
+			r.Body = io.NopCloser(strings.NewReader(bufString))
 			if scriptTagPattern.MatchString(bufString) {
 				foundPatterns = append(foundPatterns, patterns)
 			}
 		}
 	}
 	if len(foundPatterns) == 0 {
-		return nil
+		return false, nil
 	}
 	wf.logger.Info("Requst contains user custom patterns injected.",
 		"method", r.Method,
@@ -224,46 +225,75 @@ func (wf *Waf) checkCustomPatterns(w http.ResponseWriter, r *http.Request) error
 		"breaked custom patterns", foundPatterns)
 	w.WriteHeader(http.StatusForbidden)
 	if _, err := w.Write([]byte("custom pattern injectin found")); err != nil {
-		return err
+		return true, err
 	}
-	return fmt.Errorf("request: %v contains custom patterns injected: %v", r, foundPatterns)
+	return true, nil
 }
 
-func (wf *Waf) WebAppFirewall(w http.ResponseWriter, r *http.Request) error {
-	if len(wf.Cnf.allowedHTTPMethods) > 0 {
-		if err := wf.checkHTTPMethod(w, r); err != nil {
-			return err
+func (wf *Waf) WebAppFirewall(w http.ResponseWriter, r *http.Request) {
+	if len(wf.Cnf.AllowedHTTPMethods) > 0 {
+		if notSafe, err := wf.checkHTTPMethod(w, r); err != nil || notSafe {
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				wf.logger.Error(err.Error())
+			}
+			return
 		}
 	}
-	if len(wf.Cnf.ipBlackList) > 0 {
-		if err := wf.checkIP(w, r); err != nil {
-			return err
+	if len(wf.Cnf.IpBlackList) > 0 {
+		if notSafe, err := wf.checkIP(w, r); err != nil || notSafe {
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				wf.logger.Error(err.Error())
+			}
+			return
+
 		}
 	}
-	if len(wf.Cnf.queryUrlWhitelist) > 0 {
-		if err := wf.checkUrl(w, r); err != nil {
-			return err
+	if len(wf.Cnf.QueryUrlWhitelist) > 0 {
+		if notSafe, err := wf.checkUrl(w, r); err != nil || notSafe {
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				wf.logger.Error(err.Error())
+			}
+			return
 		}
 	}
-	if len(wf.Cnf.blockedPatterns) > 0 {
-		if err := wf.checkCustomPatterns(w, r); err != nil {
-			return err
+	if len(wf.Cnf.BlockedPatterns) > 0 {
+		if notSafe, err := wf.checkCustomPatterns(w, r); err != nil || notSafe {
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				wf.logger.Error(err.Error())
+			}
+			return
 		}
 	}
-	if err := wf.checkSQLInjection(w, r); err != nil {
-		return err
+	if notSafe, err := wf.checkSQLInjection(w, r); err != nil || notSafe {
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			wf.logger.Error(err.Error())
+		}
+		return
 	}
-	if err := wf.checkXSSInjection(w, r); err != nil {
-		return err
+	if notSafe, err := wf.checkXSSInjection(w, r); err != nil || notSafe {
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			wf.logger.Error(err.Error())
+		}
+		return
 	}
-	proxyReq, err := http.NewRequest(r.Method, r.URL.String(), r.Body)
+
+	proxyReq, err := http.NewRequest(r.Method, wf.backendAddress+r.URL.Path, r.Body)
 	if err != nil {
 		wf.logger.Error("error creating request")
 		w.WriteHeader(http.StatusInternalServerError)
 		if _, err := w.Write([]byte("Internal Server Error")); err != nil {
-			return err
+			w.WriteHeader(http.StatusInternalServerError)
+			wf.logger.Error(err.Error())
+			return
 		}
-		return err
+		wf.logger.Error(err.Error())
+		return
 	}
 	proxyReq.Header = r.Header
 	client := &http.Client{}
@@ -272,14 +302,15 @@ func (wf *Waf) WebAppFirewall(w http.ResponseWriter, r *http.Request) error {
 		wf.logger.Error("error forwarding request")
 		w.WriteHeader(http.StatusInternalServerError)
 		if _, err := w.Write([]byte("Internal Server Error")); err != nil {
-			return err
+			wf.logger.Error(err.Error())
+			return
 		}
-		return err
+		wf.logger.Error(err.Error())
+		return
 	}
 	defer resp.Body.Close()
 	w.WriteHeader(resp.StatusCode)
 	if _, err = io.Copy(w, resp.Body); err != nil {
-		return err
+		wf.logger.Error(err.Error())
 	}
-	return nil
 }

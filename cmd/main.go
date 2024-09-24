@@ -3,13 +3,12 @@ package main
 import (
 	"log"
 
-	"github.com/codescalersinternships/easywaf-nabil-salma/pkg"
+	waf "github.com/codescalersinternships/easywaf-nabil-salma/pkg"
 )
 
 func main() {
-	_, err := waf.NewWaf()
+	_, err := waf.NewWaf("http://localhost:8090")
 	if err != nil {
 		log.Fatal(err)
 	}
-	//println(w.Cnf.AllowedHTTPMethods[0])
 }
