@@ -16,11 +16,11 @@ func main() {
 	server := &http.Server{
 		Addr: ":8080",
 	}
-	http.HandleFunc("/",wf.WebAppFirewall)
+	http.HandleFunc("/", wf.WebAppFirewall)
 	http.Handle("/metrics", promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
-	
-	if err := server.ListenAndServe(); err != nil{
+
+	if err := server.ListenAndServe(); err != nil {
 		log.Fatalf("error running server: %v", err)
 	}
-	
+
 }

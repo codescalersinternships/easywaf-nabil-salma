@@ -32,7 +32,7 @@ type Config struct {
 	BlockedPatterns    []string `yaml:"blockedpatterns"`
 }
 
-func newMetrics() (*Metrics, *prometheus.Registry,error) {
+func newMetrics() (*Metrics, *prometheus.Registry, error) {
 	numOfReq := prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Name: "total_request_count",
@@ -57,10 +57,10 @@ func newMetrics() (*Metrics, *prometheus.Registry,error) {
 			Help: "No of requests containing blocked IPs",
 		},
 	)
-	reg:= prometheus.NewRegistry()
+	reg := prometheus.NewRegistry()
 	// Use the default Prometheus registry
 	if err := reg.Register(numOfReq); err != nil {
-		return &Metrics{},reg, fmt.Errorf("could not register total request counter: %v", err)
+		return &Metrics{}, reg, fmt.Errorf("could not register total request counter: %v", err)
 	}
 	if err := reg.Register(numberOfSQl); err != nil {
 		return &Metrics{}, reg, fmt.Errorf("could not register SQL injection counter: %v", err)
@@ -69,7 +69,7 @@ func newMetrics() (*Metrics, *prometheus.Registry,error) {
 		return &Metrics{}, reg, fmt.Errorf("could not register XSS counter: %v", err)
 	}
 	if err := reg.Register(numberOfBlockedIp); err != nil {
-		return &Metrics{},reg, fmt.Errorf("could not register blocked IPs counter: %v", err)
+		return &Metrics{}, reg, fmt.Errorf("could not register blocked IPs counter: %v", err)
 	}
 
 	return &Metrics{
@@ -77,7 +77,7 @@ func newMetrics() (*Metrics, *prometheus.Registry,error) {
 		numberOfSQlInj:    numberOfSQl,
 		numberOfXSS:       numberOfXSS,
 		numberOfBlockedIp: numberOfBlockedIp,
-	},reg, nil
+	}, reg, nil
 }
 func NewWaf(backendAddress string, args ...string) (*Waf, *prometheus.Registry, error) {
 	filePath := "config.yaml"
@@ -89,7 +89,7 @@ func NewWaf(backendAddress string, args ...string) (*Waf, *prometheus.Registry, 
 	if err != nil {
 		return &Waf{}, nil, fmt.Errorf("could not create waf: %v", err)
 	}
-	metrics,reg, err := newMetrics()
+	metrics, reg, err := newMetrics()
 	if err != nil {
 		return &Waf{}, nil, err
 	}
@@ -98,7 +98,7 @@ func NewWaf(backendAddress string, args ...string) (*Waf, *prometheus.Registry, 
 		config,
 		backendAddress,
 		metrics,
-	}, reg,nil
+	}, reg, nil
 }
 
 func (wf *Waf) checkHTTPMethod(w http.ResponseWriter, r *http.Request) (bool, error) {
