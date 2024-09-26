@@ -9,14 +9,22 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 type Waf struct {
 	logger         *slog.Logger
 	Cnf            Config
 	backendAddress string
+	Promethues	*Metrics
 }
-
+type Metrics struct{
+	numberOfRequests prometheus.Counter
+	numberOfSQlInj prometheus.Counter
+	numberOfXSS prometheus.Counter
+	numberOfBlockedIp prometheus.Counter
+}
 type Config struct {
 	AllowedHTTPMethods []string `yaml:"allowedhttpmethods"`
 	IpBlackList        []string `yaml:"ipblacklist"`
@@ -24,6 +32,49 @@ type Config struct {
 	BlockedPatterns    []string `yaml:"blockedpatterns"`
 }
 
+func newMetrics()( *Metrics, error){
+	numOfReq := prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "total_request_count",
+			Help: "No of request handled handled by waf",
+		},
+	)
+	numberOfSQl := prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "sql_injections_count",
+			Help: "No of requests containing sql injection",
+		},
+	)
+	numberOfXSS := prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "xss_count",
+			Help: "No of requests containing XSS",
+		},
+	)
+
+	numberOfBlockedIp := prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "ips_blocked_count",
+			Help: "No of requests containing blocked ips",
+		},
+	)
+	reg:= prometheus.NewRegistry()
+	if err :=reg.Register(numOfReq); err != nil{
+		return &Metrics{}, fmt.Errorf("could not register total number of request: %v", err)
+	}
+	if err := reg.Register(numberOfSQl); err != nil {
+		return &Metrics{}, fmt.Errorf("could not register number of sql injections: %v", err)
+	}
+	if err := reg.Register(numberOfXSS); err != nil {
+		return &Metrics{}, fmt.Errorf("could not register number of xss injections: %v", err)
+	}
+	if err := reg.Register(numberOfBlockedIp); err != nil {
+		return &Metrics{}, fmt.Errorf("could not register number of blocked ips: %v", err)
+	}
+	return &Metrics{
+		numberOfRequests: numOfReq, numberOfSQlInj: numberOfSQl,numberOfXSS: numberOfXSS,numberOfBlockedIp: numberOfBlockedIp,
+	}, nil
+}
 func NewWaf(backendAddress string, args ...string) (*Waf, error) {
 	filePath := "config.yaml"
 	if len(args) > 0 {
@@ -34,10 +85,15 @@ func NewWaf(backendAddress string, args ...string) (*Waf, error) {
 	if err != nil {
 		return &Waf{}, fmt.Errorf("could not create waf: %v", err)
 	}
+	metrics, err:= newMetrics()
+	if err!=nil{
+		return &Waf{}, err
+	}
 	return &Waf{
 		logger,
 		config,
 		backendAddress,
+		metrics,
 	}, nil
 }
 
@@ -68,6 +124,7 @@ func (wf *Waf) checkIP(w http.ResponseWriter, r *http.Request) (bool, error) {
 			"url", r.URL)
 		return false, nil
 	}
+	wf.Promethues.numberOfBlockedIp.Inc()
 	wf.logger.Warn("IP addres is Blacklisted",
 		"method", r.Method,
 		"ip", r.RemoteAddr,
@@ -121,6 +178,7 @@ func (wf *Waf) checkSQLInjection(w http.ResponseWriter, r *http.Request) (bool, 
 				continue
 			}
 			if sqlInjectionHelper(keyValuePair[1]) {
+				wf.Promethues.numberOfSQlInj.Inc()
 				wf.logger.Warn("sql injection detected",
 					"method", r.Method,
 					"ip", r.RemoteAddr,
@@ -141,6 +199,7 @@ func (wf *Waf) checkSQLInjection(w http.ResponseWriter, r *http.Request) (bool, 
 		bufString := buf.String()
 		r.Body = io.NopCloser(strings.NewReader(bufString))
 		if sqlInjectionHelper(bufString) {
+			wf.Promethues.numberOfSQlInj.Inc()
 			wf.logger.Warn("sql injection detected",
 				"method", r.Method,
 				"ip", r.RemoteAddr,
@@ -166,6 +225,7 @@ func (wf *Waf) checkXSSInjection(w http.ResponseWriter, r *http.Request) (bool, 
 		r.Body = io.NopCloser(strings.NewReader(bufString))
 
 		if scriptTagPattern.MatchString(bufString) {
+			wf.Promethues.numberOfXSS.Inc()
 			wf.logger.Warn("Requst contain XSS injection in the body",
 				"method", r.Method,
 				"ip", r.RemoteAddr,
@@ -180,6 +240,7 @@ func (wf *Waf) checkXSSInjection(w http.ResponseWriter, r *http.Request) (bool, 
 
 	} else if r.Method == "GET" {
 		if scriptTagPattern.MatchString(r.URL.RequestURI()) {
+			wf.Promethues.numberOfXSS.Inc()
 			wf.logger.Warn("Requst contain XSS injection in the body",
 				"method", r.Method,
 				"ip", r.RemoteAddr,
@@ -231,6 +292,7 @@ func (wf *Waf) checkCustomPatterns(w http.ResponseWriter, r *http.Request) (bool
 }
 
 func (wf *Waf) WebAppFirewall(w http.ResponseWriter, r *http.Request) {
+	wf.Promethues.numberOfRequests.Inc()
 	if len(wf.Cnf.AllowedHTTPMethods) > 0 {
 		if notSafe, err := wf.checkHTTPMethod(w, r); err != nil || notSafe {
 			if err != nil {
@@ -313,4 +375,5 @@ func (wf *Waf) WebAppFirewall(w http.ResponseWriter, r *http.Request) {
 	if _, err = io.Copy(w, resp.Body); err != nil {
 		wf.logger.Error(err.Error())
 	}
+
 }
