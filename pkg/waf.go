@@ -32,17 +32,17 @@ type Config struct {
 	BlockedPatterns    []string `yaml:"blockedpatterns"`
 }
 
-func newMetrics() (*Metrics, error) {
+func newMetrics() (*Metrics, *prometheus.Registry,error) {
 	numOfReq := prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Name: "total_request_count",
-			Help: "No of request handled handled by waf",
+			Help: "No of requests handled by waf",
 		},
 	)
 	numberOfSQl := prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Name: "sql_injections_count",
-			Help: "No of requests containing sql injection",
+			Help: "No of requests containing SQL injection",
 		},
 	)
 	numberOfXSS := prometheus.NewCounter(
@@ -51,31 +51,35 @@ func newMetrics() (*Metrics, error) {
 			Help: "No of requests containing XSS",
 		},
 	)
-
 	numberOfBlockedIp := prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Name: "ips_blocked_count",
-			Help: "No of requests containing blocked ips",
+			Help: "No of requests containing blocked IPs",
 		},
 	)
-	reg := prometheus.NewRegistry()
+	reg:= prometheus.NewRegistry()
+	// Use the default Prometheus registry
 	if err := reg.Register(numOfReq); err != nil {
-		return &Metrics{}, fmt.Errorf("could not register total number of request: %v", err)
+		return &Metrics{},reg, fmt.Errorf("could not register total request counter: %v", err)
 	}
 	if err := reg.Register(numberOfSQl); err != nil {
-		return &Metrics{}, fmt.Errorf("could not register number of sql injections: %v", err)
+		return &Metrics{}, reg, fmt.Errorf("could not register SQL injection counter: %v", err)
 	}
 	if err := reg.Register(numberOfXSS); err != nil {
-		return &Metrics{}, fmt.Errorf("could not register number of xss injections: %v", err)
+		return &Metrics{}, reg, fmt.Errorf("could not register XSS counter: %v", err)
 	}
 	if err := reg.Register(numberOfBlockedIp); err != nil {
-		return &Metrics{}, fmt.Errorf("could not register number of blocked ips: %v", err)
+		return &Metrics{},reg, fmt.Errorf("could not register blocked IPs counter: %v", err)
 	}
+
 	return &Metrics{
-		numberOfRequests: numOfReq, numberOfSQlInj: numberOfSQl, numberOfXSS: numberOfXSS, numberOfBlockedIp: numberOfBlockedIp,
-	}, nil
+		numberOfRequests:  numOfReq,
+		numberOfSQlInj:    numberOfSQl,
+		numberOfXSS:       numberOfXSS,
+		numberOfBlockedIp: numberOfBlockedIp,
+	},reg, nil
 }
-func NewWaf(backendAddress string, args ...string) (*Waf, error) {
+func NewWaf(backendAddress string, args ...string) (*Waf, *prometheus.Registry, error) {
 	filePath := "config.yaml"
 	if len(args) > 0 {
 		filePath = args[0]
@@ -83,18 +87,18 @@ func NewWaf(backendAddress string, args ...string) (*Waf, error) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	config, err := parseIntoConfig(filePath)
 	if err != nil {
-		return &Waf{}, fmt.Errorf("could not create waf: %v", err)
+		return &Waf{}, nil, fmt.Errorf("could not create waf: %v", err)
 	}
-	metrics, err := newMetrics()
+	metrics,reg, err := newMetrics()
 	if err != nil {
-		return &Waf{}, err
+		return &Waf{}, nil, err
 	}
 	return &Waf{
 		logger,
 		config,
 		backendAddress,
 		metrics,
-	}, nil
+	}, reg,nil
 }
 
 func (wf *Waf) checkHTTPMethod(w http.ResponseWriter, r *http.Request) (bool, error) {

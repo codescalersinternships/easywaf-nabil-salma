@@ -65,7 +65,7 @@ func TestWebAppFirewall(t *testing.T) {
 			res:    "custom pattern injectin found",
 		},
 	}
-	wf, err := NewWaf("http://localhost:8090")
+	wf, _, err := NewWaf("http://localhost:8090")
 	if err != nil {
 		t.Errorf("%v", err)
 	}
@@ -101,7 +101,7 @@ func TestWebAppFirewall(t *testing.T) {
 }
 
 func TestParseIntoConfig(t *testing.T) {
-	wf, err := NewWaf("http://localhost:8090")
+	wf, _, err := NewWaf("http://localhost:8090")
 	if err != nil {
 		t.Errorf("%v", err)
 	}
